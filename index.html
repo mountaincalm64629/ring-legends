@@ -145,6 +145,12 @@ body.touch #keys{display:none}
  .pad button,.atk button{font-size:11.5px}
 }
 @media (max-height:480px){.atk{grid-auto-rows:38px}.pad{grid-auto-rows:44px}#banner{top:22%}}
+.code{font:700 72px/1 Teko,Impact,sans-serif;letter-spacing:.14em;color:var(--gold);margin:2px 0 6px}
+input{-webkit-user-select:text;user-select:text;font:800 24px Barlow,sans-serif;text-transform:uppercase;letter-spacing:.2em;width:9ch;min-height:50px;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:#0e0e11;color:var(--ink)}
+input:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.btnlink{display:inline-flex;align-items:center;min-height:48px;padding:12px 18px;border-radius:12px;background:#1fa855;color:#fff;font-weight:700;text-decoration:none}
+.status{min-height:1.4em;color:var(--gold);font-weight:600;margin:14px 0 0}
+[hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){#fin{animation:none}#banner{transition:none}}
 </style>
 </head>
@@ -192,13 +198,23 @@ body.touch #keys{display:none}
 
 <section class="scr" id="online"><div class="panel">
  <h2>Online play</h2>
- <p class="sub">Live online fights with room codes are not available in this version. Online play needs a game server to connect two devices, and this page can't connect to one.</p>
- <p class="sub">What works today:</p>
- <ul class="sub" style="padding-left:20px">
-  <li><b>2 Players</b> on one computer or one iPad.</li>
-  <li>Send this game's link to a friend so they can play Career and Quick Fight on their own device. Nothing to download.</li>
- </ul>
- <div class="row"><button class="pri" data-go="duo">Play 2 Players</button><button class="ghost" data-go="home">Back</button></div>
+ <p class="sub">Fight a friend on another phone, iPad or laptop. One of you creates a room and sends the code. The other joins with it.</p>
+ <div id="onMain" class="btns">
+  <button class="pri" id="onCreate">Create a room<small>Pick your fighter, then share the code</small></button>
+  <button id="onJoinBtn">Join with a code<small>Your friend sends you a 5-letter code</small></button>
+ </div>
+ <div id="onHost" hidden>
+  <p class="sub" style="margin:0">Your room code</p>
+  <div class="code" id="onCode">·····</div>
+  <div class="row" style="margin-top:6px"><button class="gold" id="onCopy">Copy invite link</button><a class="btnlink" id="onWa" target="_blank" rel="noopener">Send on WhatsApp</a></div>
+ </div>
+ <div id="onJoin" hidden>
+  <label for="onInput" class="sub" style="display:block;margin:0 0 6px">Enter your friend's room code</label>
+  <div class="row" style="margin:0"><input id="onInput" maxlength="5" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCDE"><button class="pri" id="onGo">Join</button></div>
+ </div>
+ <p class="status" id="onStatus" role="status"></p>
+ <div class="row"><button class="ghost" id="onBack">Back</button></div>
+ <p class="note">Works best on Wi-Fi. Both players open this same game link. Some school or office networks block direct connections between devices.</p>
 </div></section>
 
 <section class="scr" id="manual"><div class="panel wide">
@@ -256,6 +272,7 @@ body.touch #keys{display:none}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 {
 const T=THREE, $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
@@ -414,7 +431,7 @@ const sparkTex=ctex(64,64,(g,w,h)=>{const gr=g.createRadialGradient(w/2,h/2,0,w/
 /* ---------- sparks ---------- */
 const sparks=[];
 for(let i=0;i<70;i++){const s=new T.Sprite(new T.SpriteMaterial({map:sparkTex,blending:T.AdditiveBlending,depthWrite:false,transparent:true}));s.visible=false;scene.add(s);sparks.push({s,v:new T.Vector3(),life:0});}
-function burst(p,n,color,speed){let c=0;for(const k of sparks){if(k.life>0)continue;k.life=.25+rnd()*.25;k.s.visible=true;k.s.position.copy(p);k.v.set(rnd()-.5,rnd()-.2,rnd()-.5).normalize().multiplyScalar(speed*(.5+rnd()));k.s.material.color.set(color);k.s.scale.setScalar(.18+rnd()*.15);if(++c>=n)break;}}
+function burst(p,n,color,speed){bc('bur',[+p.x.toFixed(2),+p.y.toFixed(2),+p.z.toFixed(2),n,color,speed]);let c=0;for(const k of sparks){if(k.life>0)continue;k.life=.25+rnd()*.25;k.s.visible=true;k.s.position.copy(p);k.v.set(rnd()-.5,rnd()-.2,rnd()-.5).normalize().multiplyScalar(speed*(.5+rnd()));k.s.material.color.set(color);k.s.scale.setScalar(.18+rnd()*.15);if(++c>=n)break;}}
 function updSparks(dt){for(const k of sparks){if(k.life<=0)continue;k.life-=dt;k.v.y-=9*dt;k.s.position.addScaledVector(k.v,dt);k.s.material.opacity=clamp(k.life*4,0,1);if(k.life<=0)k.s.visible=false;}}
 
 /* ---------- fighter rig ---------- */
@@ -459,10 +476,14 @@ function press(inp,a){inp.buf=a;inp.bufT=.22;}
 /* ---------- game state ---------- */
 const G={phase:'menu',mode:null,round:1,wins:[0,0],timer:60,t:0,paused:false,slow:0,hitstop:0,opts:null,last:null};
 let P1=null,P2=null;
+const NET={role:null,peer:null,conn:null,code:null,myChar:0,guestChar:0,intent:null,sendT:0,inT:0,lastIn:'',pending:null,timer:0};
+const me=()=>NET.role==='guest'?P2:P1, them=()=>NET.role==='guest'?P1:P2;
+const online=()=>G.mode==='online'&&NET.role;
+function bc(k,a){if(NET.role==='host'&&G.mode==='online')send({t:'ev',k,a});}
 
 class Fighter{
- constructor(def,side,o){this.def=def;this.o=o;this.st={pow:def.pow*(o.pow||1),spd:def.spd,def:def.def*(o.def||1)};this.rig=buildRig(def);this.ai=!!o.ai;this.human=!o.ai;this.aiD=o.d||.5;this.unlock=o.unlock||10;this.finOK=!!o.fin;this.phase=rnd()*6;this.reset(side);}
- reset(side){this.side=side;this.pos=new T.Vector3(side*2.1,0,0);this.y=0;this.vy=0;this.kb=new T.Vector3();this.hp=100;this.trail=100;this.atk=null;this.react=null;this.ko=false;this.block=false;this.crouch=false;this.bs=0;this.walk=0;this.moving=0;this.yaw=side<0?Math.PI/2:-Math.PI/2;this.inp=mkInput();this.aiT=.6;this.aiHoldK=null;this.aiHoldT=0;this.aiSaw=false;this.aiAir=null;this.win=false;this.combo=0;this.comboT=0;this.f={x:-side,z:0};this.J=Object.assign({},GUARD);legFit(this.J,-.22,.28);this.stats={hits:0,dmg:0,best:0};}
+ constructor(def,side,o){this.def=def;this.o=o;this.st={pow:def.pow*(o.pow||1),spd:def.spd,def:def.def*(o.def||1)};this.rig=buildRig(def);this.ai=!!o.ai;this.human=!o.ai;this.aiD=o.d||.5;this.unlock=o.unlock||10;this.finOK=!!o.fin;this.phase=rnd()*6;this.stats={hits:0,dmg:0,best:0};this.reset(side);}
+ reset(side){this.side=side;this.pos=new T.Vector3(side*2.1,0,0);this.y=0;this.vy=0;this.kb=new T.Vector3();this.hp=100;this.trail=100;this.atk=null;this.react=null;this.ko=false;this.block=false;this.crouch=false;this.bs=0;this.walk=0;this.moving=0;this.yaw=side<0?Math.PI/2:-Math.PI/2;this.inp=mkInput();this.aiT=.6;this.aiHoldK=null;this.aiHoldT=0;this.aiSaw=false;this.aiAir=null;this.win=false;this.combo=0;this.comboT=0;this.f={x:-side,z:0};this.J=Object.assign({},GUARD);legFit(this.J,-.22,.28);}
  dist(){return Math.hypot(this.opp.pos.x-this.pos.x,this.opp.pos.z-this.pos.z);}
  can(n){const m=MOVES[n];return m.fin?this.finOK:m.lg<=this.unlock;}
  free(){return !this.atk&&!this.react&&!this.ko&&this.bs<=0&&(G.phase==='fight'||G.phase==='menu');}
@@ -503,7 +524,7 @@ class Fighter{
    burst(hp,6,'#9fd0ff',3);snd('block');popup(op,'Block','blk');
   }else{
    op.hit(re,this);burst(hp,m.d>14?16:10,m.fin?'#ffcf3a':'#ffb347',m.d>14?6:4.5);
-   snd('hit',m.d/15);G.hitstop=m.d>=14?.09:.05;cam.shake=Math.min(.35,m.d/50);
+   snd('hit',m.d/15);G.hitstop=m.d>=14?.09:.05;cam.shake=Math.min(.35,m.d/50);bc('shk',[cam.shake]);
    this.combo++;this.comboT=1;this.stats.hits++;this.stats.best=Math.max(this.stats.best,this.combo);
    if(this.combo>=2&&G.phase==='fight')popup(op,this.combo+' hit combo','combo');
    if(this.ai&&G.phase==='fight'&&rnd()<this.aiD)this.aiT=Math.min(this.aiT,.06+.1*(1-this.aiD));
@@ -572,6 +593,11 @@ class Fighter{
   this.trail+=(this.hp-this.trail)*(1-Math.exp(-2.5*dt));
   this.animate(dt);
  }
+ remoteTick(dt){
+  if(this.tx!==undefined){const k=1-Math.exp(-18*dt);this.pos.x+=(this.tx-this.pos.x)*k;this.pos.z+=(this.tz-this.pos.z)*k;this.y+=(this.ty-this.y)*k;this.yaw=lerpAng(this.yaw,this.tyaw,k);}
+  this.walk+=dt*this.moving*3.4;if(this.atk)this.atk.t=Math.min(this.atk.t+dt,this.atk.m.t);if(this.react)this.react.t=Math.min(this.react.t+dt,this.react.d);
+  this.trail+=(this.hp-this.trail)*(1-Math.exp(-2.5*dt));this.animate(dt);
+ }
  animate(dt){
   const tm=performance.now()/1000+this.phase;let J=Object.assign({},GUARD);
   const fin=G.phase==='roundEnd'||G.phase==='over';
@@ -635,7 +661,7 @@ let AC=null,noiseBuf=null,muted=store.get('mute',false);
 function au(){if(!AC){try{AC=new(window.AudioContext||window.webkitAudioContext)();const n=AC.sampleRate;noiseBuf=AC.createBuffer(1,n,n);const d=noiseBuf.getChannelData(0);for(let i=0;i<n;i++)d[i]=rnd()*2-1;}catch(e){AC=null;}}if(AC&&AC.state==='suspended')AC.resume().catch(()=>{});}
 function nz(t,dur,type,freq,gain,q){const s=AC.createBufferSource();s.buffer=noiseBuf;const f=AC.createBiquadFilter();f.type=type;f.frequency.value=freq;if(q)f.Q.value=q;const g=AC.createGain();g.gain.setValueAtTime(gain,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);s.connect(f);f.connect(g);g.connect(AC.destination);s.start(t,rnd()*.5);s.stop(t+dur+.02);return f;}
 function tone(t,dur,type,f0,f1,gain){const o=AC.createOscillator();o.type=type;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+dur);const g=AC.createGain();g.gain.setValueAtTime(gain,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+dur+.02);}
-function snd(type,p=1){if(!AC||muted||!noiseBuf)return;const t=AC.currentTime;try{
+function snd(type,p=1){bc('snd',[type,p]);if(!AC||muted||!noiseBuf)return;const t=AC.currentTime;try{
  if(type==='hit'){nz(t,.16,'lowpass',900+p*700,.55);tone(t,.14,'sine',140,45,.6*Math.min(1.4,p));}
  else if(type==='block'){nz(t,.09,'highpass',1800,.3);tone(t,.06,'square',420,300,.06);}
  else if(type==='whoosh'){const f=nz(t,.2,'bandpass',600,.16*Math.min(1.3,.5+p),1.2);f.frequency.exponentialRampToValueAtTime(2400,t+.18);}
@@ -647,36 +673,36 @@ function setMute(m){muted=m;store.set('mute',m);$('#muteBtn').textContent='Sound
 
 /* ---------- HUD helpers ---------- */
 const pops=[];
-function popup(f,text,cls){const el=document.createElement('div');el.className='pop '+(cls||'');el.textContent=text;$('#pops').appendChild(el);pops.push({el,p:new T.Vector3(f.pos.x+(rnd()-.5)*.3,f.y+2.15*f.def.h,f.pos.z),t:0});}
+function popup(f,text,cls,fromNet){if(!fromNet)bc('pop',[f===P1?1:2,text,cls||'']);if(cls==='warn'&&f!==me())return;const el=document.createElement('div');el.className='pop '+(cls||'');el.textContent=text;$('#pops').appendChild(el);pops.push({el,p:new T.Vector3(f.pos.x+(rnd()-.5)*.3,f.y+2.15*f.def.h,f.pos.z),t:0});}
 const tmpV=new T.Vector3();
 function updPops(dt){const w=window.innerWidth,h=window.innerHeight;for(let i=pops.length-1;i>=0;i--){const o=pops[i];o.t+=dt;o.p.y+=dt*.9;tmpV.copy(o.p).project(camera);const x=(tmpV.x*.5+.5)*w,y=(-tmpV.y*.5+.5)*h;o.el.style.transform=`translate(${x}px,${y}px) translate(-50%,-50%) scale(${1+Math.max(0,.15-o.t)*3})`;o.el.style.opacity=clamp((1.1-o.t)*2,0,1);if(o.t>1.1||tmpV.z>1){o.el.remove();pops.splice(i,1);}}}
 function clearPops(){for(const o of pops)o.el.remove();pops.length=0;}
 let banT=0;
-function banner(txt,sub,dur=1.4){const b=$('#banner');b.textContent=txt;if(sub){const s=document.createElement('small');s.textContent=sub;b.appendChild(s);}b.classList.add('on');banT=dur;}
+function banner(txt,sub,dur=1.4){bc('ban',[txt,sub||'',dur]);const b=$('#banner');b.textContent=txt;if(sub){const s=document.createElement('small');s.textContent=sub;b.appendChild(s);}b.classList.add('on');banT=dur;}
 let toastT=0;function toast(txt,dur=3){const t=$('#toast');t.textContent=txt;t.classList.add('on');toastT=dur;}
 function renderWins(){for(const i of[0,1])$('#w'+(i+1)).innerHTML=[0,1].map(k=>`<span class="${k<G.wins[i]?'w':''}"></span>`).join('');}
 function updHUD(){
  if(!P1||!P2)return;
  for(const [i,f] of [[1,P1],[2,P2]]){$('#h'+i).style.transform=`scaleX(${f.hp/100})`;$('#t'+i).style.transform=`scaleX(${f.trail/100})`;$('#b'+i).classList.toggle('low',f.hp<35);}
  $('#tm').textContent=Math.max(0,Math.ceil(G.timer));
- const ready=G.phase==='fight'&&P1.finOK&&P2.hp<35&&!P2.ko;
+ const ready=G.phase==='fight'&&me().finOK&&them().hp<35&&!them().ko;
  $('#fin').style.display=ready&&!document.body.classList.contains('touch')?'block':'none';
  const fb=$('#atk .fin');if(fb)fb.classList.toggle('off',!ready);
 }
 function keyGuide(){
- const u=P1.unlock,row=(k,t,lk,note)=>`<div class="${lk?'lk':''}"><kbd>${k}</kbd>${t}${lk?' · L'+note:''}</div>`;
+ const L=me(),u=L.unlock,row=(k,t,lk,note)=>`<div class="${lk?'lk':''}"><kbd>${k}</kbd>${t}${lk?' · L'+note:''}</div>`;
  let h='<div class="sec">Move</div>'+row('A / D','Step back / in')+row('Q / C','Circle left / right')+row('W / Space','Jump')+row('S','Duck (dodges high)')+row('F','Block');
  h+='<div class="sec">Attack</div>';
  for(const k in MOVES){const m=MOVES[k];if(m.fin)continue;h+=row(m.k,m.n,m.lg>u,m.lg);}
- h+='<div class="sec">Special</div>'+row('T','Hurricane Drop'+(P1.finOK?' (opp under 35 HP)':''),!P1.finOK,'');
+ h+='<div class="sec">Special</div>'+row('T','Hurricane Drop'+(L.finOK?' (opp under 35 HP)':''),!L.finOK,'');
  if(G.mode==='duo')h+='<div class="sec">Player 2</div><div>Arrows move/jump/duck, Right Shift or Enter blocks, number pad or , . / ; \' [ ] \\ - = for attacks. See Manual.</div>';
  h+='<div class="sec">Camera</div><div>Drag to rotate 360°, scroll to zoom, <kbd>0</kbd> resets.</div><div><kbd>Esc</kbd>Pause</div>';
  $('#keyList').innerHTML=h.replace(/ · L(?=<|$)/g,'');
 }
 const SHORT={jab:'Jab',cross:'Cross',hook:'Hook',round:'Round- house',low:'Low Kick',elbow:'Elbow',tackle:'Tackle',slide:'Slide',upper:'Upper- cut',tornado:'Tornado',jkick:'Jump Kick',knee:'Flying Knee',spinback:'Spin Back',body:'Body Shot',superman:'Superman',axe:'Axe Kick',dragon:'Dragon Rush'};
 function touchButtons(){
- const list=Object.keys(MOVES).filter(k=>!MOVES[k].fin&&P1.can(k));
- $('#atk').innerHTML=list.map(k=>`<button data-a="${k}" class="${MOVES[k].air?'air':''}">${SHORT[k]}</button>`).join('')+(P1.finOK?'<button data-a="finisher" class="fin off">FINISHER</button>':'');
+ const L=me(),list=Object.keys(MOVES).filter(k=>!MOVES[k].fin&&L.can(k));
+ $('#atk').innerHTML=list.map(k=>`<button data-a="${k}" class="${MOVES[k].air?'air':''}">${SHORT[k]}</button>`).join('')+(L.finOK?'<button data-a="finisher" class="fin off">FINISHER</button>':'');
 }
 
 /* ---------- input ---------- */
@@ -686,6 +712,7 @@ const P2K={ArrowLeft:'fwd',ArrowRight:'back',ArrowUp:'jump',ArrowDown:'crouch',P
 const HELD=new Set(['fwd','back','sl','sr','crouch','block']);
 function route(code){
  if(!P1||!P2||G.phase==='menu')return null;
+ if(NET.role==='guest'&&G.mode==='online'){if(P1K[code])return[P2,P1K[code]];if(P1A[code])return[P2,P1A[code]];return null;}
  if(P1K[code])return[P1,P1K[code]];
  if(G.mode==='duo'){if(P2K[code])return[P2,P2K[code]];}
  else if(P1A[code])return[P1,P1A[code]];
@@ -705,10 +732,10 @@ window.addEventListener('blur',()=>{for(const f of[P1,P2])if(f&&f.human)for(cons
 {
  const down=new Map();
  const tp=$('#touch');
- tp.addEventListener('pointerdown',e=>{const b=e.target.closest('button');if(!b||!P1)return;e.preventDefault();au();try{b.setPointerCapture(e.pointerId);}catch(_){}
-  if(b.dataset.h){P1.inp[b.dataset.h]=1;down.set(e.pointerId,b);b.classList.add('held');}
-  else{press(P1.inp,b.dataset.p||b.dataset.a);b.classList.add('held');setTimeout(()=>b.classList.remove('held'),120);}});
- const rel=e=>{const b=down.get(e.pointerId);if(b){P1.inp[b.dataset.h]=0;b.classList.remove('held');down.delete(e.pointerId);}};
+ tp.addEventListener('pointerdown',e=>{const b=e.target.closest('button');if(!b||!P1)return;e.preventDefault();const F=me();au();try{b.setPointerCapture(e.pointerId);}catch(_){}
+  if(b.dataset.h){F.inp[b.dataset.h]=1;down.set(e.pointerId,b);b.classList.add('held');}
+  else{press(F.inp,b.dataset.p||b.dataset.a);b.classList.add('held');setTimeout(()=>b.classList.remove('held'),120);}});
+ const rel=e=>{const b=down.get(e.pointerId);if(b){me().inp[b.dataset.h]=0;b.classList.remove('held');down.delete(e.pointerId);}};
  tp.addEventListener('pointerup',rel);tp.addEventListener('pointercancel',rel);tp.addEventListener('lostpointercapture',rel);
  tp.addEventListener('contextmenu',e=>e.preventDefault());
 }
@@ -722,10 +749,11 @@ function setFighters(a,b,oa,ob){if(P1)disposeRig(P1.rig);if(P2)disposeRig(P2.rig
 function demo(){G.phase='menu';G.mode=null;G.paused=false;clearPops();const o=(save.char+11)%30;setFighters(save.char,o,{ai:true,d:.35,unlock:6},{ai:true,d:.35,unlock:6});resetView();}
 function startMatch(mode,a,b,opts){
  G.mode=mode;G.opts=opts;G.last=[mode,a,b,opts];G.paused=false;
- setFighters(a,b,{ai:false,unlock:opts.unlock,fin:opts.fin},{ai:mode!=='duo',d:opts.d,unlock:opts.botUnlock,fin:opts.botFin,pow:opts.botPow});
- $('#n1').textContent=ROSTER[a].name;$('#s1').textContent=mode==='duo'?'P1 · '+ROSTER[a].style:ROSTER[a].style;
+ setFighters(a,b,{ai:false,unlock:opts.unlock,fin:opts.fin},{ai:mode!=='duo'&&mode!=='online',d:opts.d,unlock:opts.botUnlock,fin:opts.botFin,pow:opts.botPow});
+ $('#n1').textContent=ROSTER[a].name;$('#s1').textContent=mode==='duo'?'P1 · '+ROSTER[a].style:mode==='online'?'You · '+ROSTER[a].style:ROSTER[a].style;
  $('#n2').textContent=ROSTER[b].name;$('#s2').textContent=mode==='duo'?'P2 · '+ROSTER[b].style:ROSTER[b].style;
  $('#lbl').textContent=opts.label||'';
+ $('#pauseBtn').hidden=mode==='online';
  G.wins=[0,0];G.round=1;renderWins();keyGuide();touchButtons();show(null);startRound();
 }
 function startRound(){P1.reset(-1);P2.reset(1);P1.opp=P2;P2.opp=P1;G.timer=60;G.phase='intro';G.t=1.9;G.slow=0;clearPops();resetView();cam.dist=7;banner('Round '+G.round,G.round===3?'Final round':'',1.3);snd('bell');}
@@ -745,13 +773,16 @@ function matchEnd(){
  let title,sub,belt=null;const st=P1.stats;
  if(G.mode==='duo'){title=draw?'Draw':(won?P1:P2).def.name+' wins';sub=draw?'Nobody took two rounds.':(won?'Player 1':'Player 2')+' wins the match '+Math.max(...G.wins)+'–'+Math.min(...G.wins)+'.';}
  else{title=draw?'Draw':won?'You win':'You lose';sub=`Rounds ${G.wins[0]}–${G.wins[1]} · ${st.hits} hits landed · best combo ${st.best} · ${Math.round(st.dmg)} damage dealt`;}
+ if(G.mode==='online'){title=draw?'Draw':won?'You win':'You lose';sub=`Rounds ${G.wins[0]}–${G.wins[1]} · ${st.hits} hits landed · best combo ${st.best}`;
+  const s2=P2.stats;send({t:'end',title:draw?'Draw':won?'You lose':'You win',sub:`Rounds ${G.wins[1]}–${G.wins[0]} · ${s2.hits} hits landed · best combo ${s2.best}`});}
  if(G.mode==='career'&&won){belt=careerWin();persist();}
  $('#resTitle').textContent=title;$('#resSub').textContent=sub;
  $('#resBelt').innerHTML=belt===null?'':`<div class="beltc" style="margin-bottom:14px"><div class="belt" style="--b:${LEAGUES[belt][2]}"></div><b>${LEAGUES[belt][1]} earned</b><small>${LEAGUES[belt][0]} complete${belt===9?'. You are the Champion.':'. League '+(belt+2)+' is open.'}</small></div>`;
  let btns='';
  if(G.mode==='career')btns+=won?`<button class="pri" id="rNext">Next fight<small>${save.champ&&save.league===9&&belt===9?'Defend your title':LEAGUES[save.league][0]+' · Fight '+(save.fight+1)+' of 5'}</small></button>`:'<button class="pri" id="rRetry">Try again</button>';
  else btns+='<button class="pri" id="rRetry">Rematch</button>';
- btns+='<button id="rMenu">Main menu</button>';
+ if(G.mode==='online')btns=btns.replace('Main menu','Leave room');
+ btns+=G.mode==='online'?'<button id="rMenu">Leave room</button>':'<button id="rMenu">Main menu</button>';
  $('#resBtns').innerHTML=btns;
  setTimeout(()=>{if(G.phase==='over')show('result');},600);
 }
@@ -760,7 +791,7 @@ function startCareer(){
  const d=clamp((L*5+F)/45,0,1);
  startMatch('career',save.char,o,{unlock:L+1,fin:save.ko,botUnlock:L+1,botFin:L>=4,d,botPow:.85+.3*d,label:`${LEAGUES[L][0]} · Fight ${F+1} of 5`});
 }
-function togglePause(){if(G.phase==='menu'||G.phase==='over')return;G.paused=!G.paused;show(G.paused?'pause':null);for(const k of HELD)if(P1)P1.inp[k]=0;}
+function togglePause(){if(G.phase==='menu'||G.phase==='over'||G.mode==='online')return;G.paused=!G.paused;show(G.paused?'pause':null);for(const k of HELD)if(P1)P1.inp[k]=0;}
 
 /* ---------- screens ---------- */
 let prev='home';
@@ -794,11 +825,11 @@ function openSelect(mode){
 }
 function renderSel(){
  const cur=sel.step===0?sel.p1:sel.p2,f=ROSTER[cur];
- const t={career:'Choose your career fighter',quick:sel.step===0?'Choose your fighter':'Choose your opponent',duo:sel.step===0?'Player 1: choose':'Player 2: choose'}[sel.mode];
+ const t={online:'Choose your fighter for online play',career:'Choose your career fighter',quick:sel.step===0?'Choose your fighter':'Choose your opponent',duo:sel.step===0?'Player 1: choose':'Player 2: choose'}[sel.mode];
  $('#selTitle').textContent=t;$('#selSub').textContent=`${f.name} · ${f.style}`;
  $('#selStats').innerHTML=[['Power',f.pow],['Speed',f.spd],['Defence',f.def]].map(s=>`<div class="stat">${s[0]}<i style="width:${Math.round((s[1]-.8)/.32*100)}%"></i></div>`).join('');
  $('#grid').innerHTML=ROSTER.map((r,i)=>`<button class="card ${i===sel.p1&&(sel.step===0||sel.mode!=='career')?'sel':''} ${sel.step===1&&i===sel.p2?'p2':''}" data-i="${i}"><span class="av" style="--s:${r.skin};--g:${r.gear};--h:${r.hair}"></span><b>${r.name}</b><small>${r.style}</small></button>`).join('');
- $('#selOk').textContent=sel.mode==='career'?'Confirm fighter':sel.step===0?'Next: opponent':'Fight';
+ $('#selOk').textContent=sel.mode==='online'?'Continue':sel.mode==='career'?'Confirm fighter':sel.step===0?'Next: opponent':'Fight';
 }
 $('#grid').addEventListener('click',e=>{const b=e.target.closest('.card');if(!b)return;const i=+b.dataset.i;
  if(sel.step===0){sel.p1=i;if(G.phase==='menu'){disposeRig(P1.rig);P1=new Fighter(ROSTER[i],-1,{ai:true,d:.35,unlock:6});P1.opp=P2;P2.opp=P1;}}
@@ -807,6 +838,7 @@ $('#grid').addEventListener('click',e=>{const b=e.target.closest('.card');if(!b)
 $('#diffSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;sel.diff=+b.dataset.d;for(const x of $$('#diffSeg button'))x.classList.toggle('on',x===b);});
 $('#selOk').addEventListener('click',()=>{
  if(sel.mode==='career'){save.char=sel.p1;persist();show('career');return;}
+ if(sel.mode==='online'){NET.myChar=sel.p1;afterPick();return;}
  if(sel.step===0){sel.step=1;if(sel.p2===sel.p1)sel.p2=(sel.p1+1)%30;renderSel();
   if(G.phase==='menu'){disposeRig(P2.rig);P2=new Fighter(ROSTER[sel.p2],1,{ai:true,d:.35,unlock:6});P1.opp=P2;P2.opp=P1;}return;}
  if(sel.mode==='quick'){const d=DIFFS[sel.diff];startMatch('quick',sel.p1,sel.p2,{unlock:10,fin:true,botUnlock:d[2],botFin:sel.diff>=2,d:d[1],botPow:d[3],label:'Quick Fight · '+d[0]});}
@@ -816,7 +848,8 @@ document.addEventListener('click',e=>{
  const b=e.target.closest('[data-go]');if(!b)return;au();const g=b.dataset.go;
  if(g==='career'){if(!store.get('picked',false)){store.set('picked',true);openSelect('career');}else show('career');}
  else if(g==='quick'||g==='duo')openSelect(g);
- else if(g==='back'){if(sel.step===1){sel.step=0;renderSel();}else show(sel.mode==='career'?'career':'home');}
+ else if(g==='online'){if(!NET.role)onlineView('main');show('online');}
+ else if(g==='back'){if(sel.step===1){sel.step=0;renderSel();}else if(sel.mode==='online'){onlineView('main');show('online');}else show(sel.mode==='career'?'career':'home');}
  else if(g==='manual-p'){show('manual');prev='pause';}
  else if(g==='home'&&prev==='pause'&&G.paused){show('pause');}
  else show(g);
@@ -826,6 +859,9 @@ $('#carChar').addEventListener('click',()=>openSelect('career'));
 let resetArm=0;
 $('#carReset').addEventListener('click',e=>{if(Date.now()-resetArm<4000){save={league:0,fight:0,belts:[],ko:false,char:save.char,champ:false};persist();e.target.textContent='Career reset';renderCareer();resetArm=0;}else{resetArm=Date.now();e.target.textContent='Tap again to erase all progress';}});
 $('#resBtns').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+ if(b.id==='rAsk'){send({t:'rematch'});b.textContent='Asked your friend for a rematch…';return;}
+ if(b.id==='rMenu'&&NET.role){netClose();demo();show('home');return;}
+ if(b.id==='rRetry'&&G.mode==='online'){startOnline(NET.guestChar);return;}
  if(b.id==='rNext')startCareer();else if(b.id==='rRetry'){const l=G.last;if(l[0]==='career')startCareer();else startMatch(...l);}else{demo();show('home');}});
 $('#pResume').addEventListener('click',togglePause);
 $('#pRestart').addEventListener('click',()=>{const l=G.last;if(l[0]==='career')startCareer();else startMatch(...l);});
@@ -834,7 +870,108 @@ $('#pauseBtn').addEventListener('click',togglePause);
 $('#viewBtn').addEventListener('click',resetView);
 $('#keysBtn').addEventListener('click',e=>{const k=$('#keys');k.classList.toggle('min');e.target.textContent=k.classList.contains('min')?'Show':'Hide';});
 $('#muteBtn').addEventListener('click',()=>setMute(!muted));
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&(G.phase==='fight'||G.phase==='intro')&&!G.paused)togglePause();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&G.mode!=='online'&&(G.phase==='fight'||G.phase==='intro')&&!G.paused)togglePause();});
+
+/* ---------- online (PeerJS / WebRTC) ---------- */
+const ICE=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},
+ {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
+ {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
+ {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'}];
+const PEER_OPTS=Object.assign({debug:0,config:{iceServers:ICE}},window.RL_PEER_OPTS||{});
+const ROOM=c=>'ringlegends3d-'+c.toLowerCase();
+function status(t){$('#onStatus').textContent=t;}
+function onlineView(v){$('#onMain').hidden=v!=='main';$('#onHost').hidden=v!=='host';$('#onJoin').hidden=v!=='join';if(v==='main')status('');}
+function send(o){try{if(NET.conn&&NET.conn.open)NET.conn.send(o);}catch(e){}}
+function mkCode(){const A='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<5;i++)c+=A[Math.floor(rnd()*A.length)];return c;}
+function netClose(){const c=NET.conn,p=NET.peer;NET.role=NET.conn=NET.peer=null;clearTimeout(NET.timer);try{c&&c.close();}catch(e){}try{p&&p.destroy();}catch(e){}}
+function netLost(){if(!NET.role)return;const inGame=G.mode==='online';netClose();if(inGame){demo();toast('Your friend left the room',3);}onlineView('main');show('online');status('Your friend left the room. Create or join a new one.');}
+function peerOK(){if(typeof Peer==='undefined'){status('Online play could not load. Check your internet connection and reload the page.');return false;}return true;}
+function afterPick(){
+ show('online');
+ if(NET.intent==='host'){onlineView('host');hostRoom();}
+ else{onlineView('join');const i=$('#onInput');if(NET.pending){i.value=NET.pending;NET.pending=null;joinRoom(i.value);}else setTimeout(()=>i.focus(),50);}
+}
+function hostRoom(){
+ netClose();if(!peerOK())return;
+ NET.role='host';NET.code=mkCode();$('#onCode').textContent=NET.code;status('Creating your room…');
+ const p=new Peer(ROOM(NET.code),PEER_OPTS);NET.peer=p;
+ p.on('open',()=>{const link=location.href.split('#')[0]+'#join-'+NET.code;NET.link=link;
+  $('#onWa').href='https://wa.me/?text='+encodeURIComponent('Fight me in Ring Legends 3D! Room code '+NET.code+' — tap to join: '+link);
+  status('Waiting for your friend to join…');});
+ p.on('connection',c=>{if(NET.conn){c.close();return;}NET.conn=c;
+  c.on('open',()=>status('Friend connected. Starting…'));c.on('data',onData);c.on('close',netLost);c.on('error',netLost);});
+ p.on('disconnected',()=>{if(NET.peer===p&&!p.destroyed)try{p.reconnect();}catch(e){}});
+ p.on('error',e=>{if(NET.peer!==p)return;if(e.type==='unavailable-id'){hostRoom();return;}status('Could not create the room ('+e.type+'). Check your internet and try again.');});
+}
+function joinRoom(code){
+ code=(code||'').trim().toUpperCase();if(!/^[A-Z0-9]{5}$/.test(code)){status('Enter the 5-letter code your friend sent.');return;}
+ netClose();if(!peerOK())return;
+ NET.role='guest';NET.code=code;status('Connecting to room '+code+'…');
+ const p=new Peer(PEER_OPTS);NET.peer=p;
+ NET.timer=setTimeout(()=>{if(NET.peer===p&&!(NET.conn&&NET.conn.open)){netClose();status("Couldn't connect. Check the code, make sure your friend's room is still open, and try Wi-Fi.");}},20000);
+ p.on('open',()=>{const c=p.connect(ROOM(code),{reliable:true});NET.conn=c;
+  c.on('open',()=>{clearTimeout(NET.timer);status('Connected! Starting the fight…');send({t:'hello',char:NET.myChar});});
+  c.on('data',onData);c.on('close',netLost);c.on('error',netLost);});
+ p.on('error',e=>{if(NET.peer!==p)return;clearTimeout(NET.timer);netClose();
+  status(e.type==='peer-unavailable'?'No room with code '+code+'. Check the code with your friend.':"Couldn't connect ("+e.type+"). Try again, or switch to Wi-Fi.");});
+}
+function startOnline(gc){
+ NET.guestChar=gc;NET.seen=performance.now();
+ startMatch('online',NET.myChar,gc,{unlock:10,fin:true,botUnlock:10,botFin:true,label:'Online · Room '+NET.code});
+ send({t:'start',a:NET.myChar,b:gc,code:NET.code});
+}
+function startGuest(d){
+ NET.seen=performance.now();G.mode='online';G.paused=false;G.last=null;clearPops();
+ setFighters(d.a,d.b,{ai:false,unlock:10,fin:true},{ai:false,unlock:10,fin:true});
+ $('#n1').textContent=ROSTER[d.a].name;$('#s1').textContent=ROSTER[d.a].style;
+ $('#n2').textContent=ROSTER[d.b].name;$('#s2').textContent='You · '+ROSTER[d.b].style;
+ $('#lbl').textContent='Online · Room '+d.code;$('#pauseBtn').hidden=true;
+ G.wins=[0,0];G.round=1;G.phase='intro';renderWins();keyGuide();touchButtons();resetView();show(null);
+}
+const r3=v=>Math.round(v*1000)/1000;
+function pack(f){return[r3(f.pos.x),r3(f.pos.z),r3(f.y),r3(f.yaw),Math.round(f.hp*10)/10,f.atk?f.atk.n:0,f.atk?r3(f.atk.t):0,f.react?f.react.type:0,f.react?r3(f.react.t):0,f.react&&f.react.hold?1:0,f.block?1:0,f.crouch?1:0,r3(f.moving),f.win?1:0,f.ko?1:0];}
+function snap(){return{t:'s',ph:G.phase,tm:r3(G.timer),r:G.round,w:G.wins,f:[pack(P1),pack(P2)]};}
+function applySnap(d){
+ G.phase=d.ph;G.timer=d.tm;G.round=d.r;if(d.w[0]!==G.wins[0]||d.w[1]!==G.wins[1]){G.wins=d.w.slice();renderWins();}
+ [P1,P2].forEach((f,i)=>{const s=d.f[i];if(f.tx===undefined){f.pos.x=s[0];f.pos.z=s[1];}f.tx=s[0];f.tz=s[1];f.ty=s[2];f.tyaw=s[3];f.hp=s[4];
+  const an=s[5];if(an&&MOVES[an]){if(!f.atk||f.atk.n!==an||s[6]<f.atk.t-.15)f.atk={n:an,m:MOVES[an],t:s[6],hits:0,cd:0};}else f.atk=null;
+  const rt=s[7];if(rt&&REACT[rt]){if(!f.react||f.react.type!==rt||s[8]<f.react.t-.15)f.react={type:rt,R:REACT[rt],t:s[8],d:REACT[rt].d,hold:!!s[9]};else f.react.hold=!!s[9];}else f.react=null;
+  f.block=!!s[10];f.crouch=!!s[11];f.moving=s[12];f.win=!!s[13];f.ko=!!s[14];});
+}
+function guestFrame(dt){
+ P1.remoteTick(dt);P2.remoteTick(dt);
+ const h=P2.inp,key=''+h.fwd+h.back+h.sl+h.sr+h.crouch+h.block;NET.inT-=dt;
+ if(h.buf||key!==NET.lastIn||NET.inT<=0){send({t:'in',h:[h.fwd,h.back,h.sl,h.sr,h.crouch,h.block],p:h.buf||0});h.buf=null;NET.lastIn=key;NET.inT=.1;}
+}
+const HK=['fwd','back','sl','sr','crouch','block'];
+function onData(d){
+ if(!d||typeof d!=='object')return;NET.seen=performance.now();
+ if(NET.role==='host'){
+  if(d.t==='hello'&&typeof d.char==='number'&&ROSTER[d.char]&&G.mode!=='online')startOnline(d.char);
+  else if(d.t==='in'&&P2&&G.mode==='online'&&Array.isArray(d.h)){HK.forEach((k,i)=>P2.inp[k]=d.h[i]?1:0);if(d.p&&(d.p==='jump'||MOVES[d.p]))press(P2.inp,d.p);}
+  else if(d.t==='rematch'&&G.phase==='over')startOnline(NET.guestChar);
+ }else if(NET.role==='guest'){
+  if(d.t==='start'&&ROSTER[d.a]&&ROSTER[d.b])startGuest(d);
+  else if(G.mode!=='online'||!P1)return;
+  else if(d.t==='s')applySnap(d);
+  else if(d.t==='ev'){const a=d.a||[];
+   if(d.k==='ban')banner(String(a[0]),String(a[1]||''),+a[2]||1.4);
+   else if(d.k==='pop')popup(a[0]===1?P1:P2,String(a[1]),String(a[2]||''),true);
+   else if(d.k==='snd')snd(String(a[0]),+a[1]||1);
+   else if(d.k==='bur')burst(new T.Vector3(+a[0],+a[1],+a[2]),+a[3]||8,String(a[4]),+a[5]||4);
+   else if(d.k==='shk')cam.shake=Math.min(.4,+a[0]||0);}
+  else if(d.t==='end'){G.phase='over';$('#resTitle').textContent=String(d.title);$('#resSub').textContent=String(d.sub);$('#resBelt').innerHTML='';
+   $('#resBtns').innerHTML='<button class="pri" id="rAsk">Ask for a rematch</button><button id="rMenu">Leave room</button>';setTimeout(()=>{if(G.phase==='over')show('result');},600);}
+ }
+}
+$('#onCreate').addEventListener('click',()=>{au();NET.intent='host';openSelect('online');});
+$('#onJoinBtn').addEventListener('click',()=>{au();NET.intent='join';openSelect('online');});
+$('#onGo').addEventListener('click',()=>{au();joinRoom($('#onInput').value);});
+$('#onInput').addEventListener('keydown',e=>{if(e.key==='Enter'){au();joinRoom(e.target.value);}});
+$('#onInput').addEventListener('input',e=>{e.target.value=e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'');});
+$('#onCopy').addEventListener('click',()=>{const t=NET.link||NET.code;try{navigator.clipboard.writeText(t).then(()=>status('Invite link copied. Paste it to your friend. Waiting for them to join…'),()=>status('Copy blocked. Send your friend the code '+NET.code));}catch(e){status('Send your friend the code '+NET.code);}});
+$('#onBack').addEventListener('click',()=>{netClose();onlineView('main');show('home');});
+{const m=/^#join-([A-Za-z0-9]{5})$/.exec(location.hash);if(m){NET.intent='join';NET.pending=m[1].toUpperCase();setTimeout(()=>{openSelect('online');$('#selSub').textContent='Pick your fighter, then you join room '+NET.pending+'.';},0);}}
 
 /* ---------- main loop ---------- */
 let last=performance.now();
@@ -854,7 +991,10 @@ function loop(now){
  if(G.paused)dt=0;
  if(G.hitstop>0){G.hitstop-=raw;dt=0;}
  if(G.slow>0){G.slow-=raw;dt*=.32;}
- if(P1&&P2&&dt>0)step(dt);
+ if(NET.role==='guest'&&G.mode==='online'&&P1&&P2)guestFrame(raw);
+ else if(P1&&P2&&dt>0)step(dt);
+ if(NET.role&&G.mode==='online'&&NET.seen&&performance.now()-NET.seen>6000){NET.seen=0;netLost();}
+ if(NET.role==='host'&&G.mode==='online'&&P1&&P2){NET.sendT-=raw;if(NET.sendT<=0){NET.sendT=1/30;send(snap());}}
  updSparks(dt);updCam(raw);updPops(raw);updHUD();
  if(banT>0){banT-=raw;if(banT<=0)$('#banner').classList.remove('on');}
  if(toastT>0){toastT-=raw;if(toastT<=0)$('#toast').classList.remove('on');}
